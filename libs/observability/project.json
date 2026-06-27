@@ -4,6 +4,13 @@
   "sourceRoot": "libs/observability/src",
   "projectType": "library",
   "tags": [],
-  "// targets": "to see all targets run: nx show project observability --web",
-  "targets": {}
+  "targets": {
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "npx vitest run --config vite.config.ts",
+        "cwd": "libs/observability"
+      }
+    }
+  }
 }

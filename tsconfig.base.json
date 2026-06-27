@@ -15,7 +15,7 @@
     "skipDefaultLibCheck": true,
     "baseUrl": ".",
     "paths": {
-      "observability": ["./libs/observability/src/index.ts"]
+      "@platform/observability": ["./libs/observability/src/index.ts"]
     }
   },
   "exclude": ["node_modules", "tmp"]

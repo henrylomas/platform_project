@@ -1,14 +1,20 @@
 import express from 'express';
+import cors from 'cors';
+import { createObservability, ConsoleProvider } from '@platform/observability';
 
-const host = process.env.HOST ?? 'localhost';
 const port = process.env.PORT ? Number(process.env.PORT) : 3000;
+
+const obs = createObservability(new ConsoleProvider(), 'api');
 
 const app = express();
 
-app.get('/', (req, res) => {
-    res.send({ 'message': 'Hello API'});
+app.use(cors());
+
+app.get('/health', (_req, res) => {
+  obs.info('health check');
+  res.json({ status: 'ok', service: 'api' });
 });
 
-app.listen(port, host, () => {
-    console.log(`[ ready ] http://${host}:${port}`);
+app.listen(port, () => {
+  obs.info('server started', { port });
 });
