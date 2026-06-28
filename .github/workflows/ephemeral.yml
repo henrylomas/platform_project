@@ -64,15 +64,25 @@ jobs:
 
       # --- Deploy API to Railway ---------------------------------------------
 
-      - name: Deploy API to Railway
+      - name: Create API service
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
         run: |
-          railway service create \
-            --name "${{ env.API_SERVICE }}" \
-            --project ${{ secrets.RAILWAY_PROJECT_ID }} || true
+          curl -sf \
+            -X POST \
+            -H "Authorization: Bearer ${RAILWAY_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"query\":\"mutation { serviceCreate(input: { projectId: \\\"${RAILWAY_PROJECT_ID}\\\", name: \\\"${{ env.API_SERVICE }}\\\" }) { id } }\"}" \
+            https://backboard.railway.app/graphql/v2 || true
+          # || true — idempotent: no-ops if the service already exists
+
+      - name: Deploy API image
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
+        run: |
           railway up \
-            --project ${{ secrets.RAILWAY_PROJECT_ID }} \
             --service "${{ env.API_SERVICE }}" \
             --image "${{ env.API_IMAGE }}" \
             --detach
@@ -81,10 +91,16 @@ jobs:
         id: api-url
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
         run: |
-          domain=$(railway domain \
-            --project ${{ secrets.RAILWAY_PROJECT_ID }} \
-            --service "${{ env.API_SERVICE }}")
+          domain=$(curl -sf \
+            -X POST \
+            -H "Authorization: Bearer ${RAILWAY_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"query\":\"{ project(id: \\\"${RAILWAY_PROJECT_ID}\\\") { services { edges { node { name domains { serviceDomains { domain } } } } } } }\"}" \
+            https://backboard.railway.app/graphql/v2 \
+          | jq -r --arg name "${{ env.API_SERVICE }}" \
+              '.data.project.services.edges[] | select(.node.name == $name) | .node.domains.serviceDomains[0].domain // empty')
           echo "url=https://${domain}" >> "$GITHUB_OUTPUT"
 
       # --- Web image ---------------------------------------------------------
@@ -102,15 +118,24 @@ jobs:
 
       # --- Deploy web to Railway --------------------------------------------
 
-      - name: Deploy web to Railway
+      - name: Create web service
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
         run: |
-          railway service create \
-            --name "${{ env.WEB_SERVICE }}" \
-            --project ${{ secrets.RAILWAY_PROJECT_ID }} || true
+          curl -sf \
+            -X POST \
+            -H "Authorization: Bearer ${RAILWAY_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"query\":\"mutation { serviceCreate(input: { projectId: \\\"${RAILWAY_PROJECT_ID}\\\", name: \\\"${{ env.WEB_SERVICE }}\\\" }) { id } }\"}" \
+            https://backboard.railway.app/graphql/v2 || true
+
+      - name: Deploy web image
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
+        run: |
           railway up \
-            --project ${{ secrets.RAILWAY_PROJECT_ID }} \
             --service "${{ env.WEB_SERVICE }}" \
             --image "${{ env.WEB_IMAGE }}" \
             --detach
@@ -119,10 +144,16 @@ jobs:
         id: web-url
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
         run: |
-          domain=$(railway domain \
-            --project ${{ secrets.RAILWAY_PROJECT_ID }} \
-            --service "${{ env.WEB_SERVICE }}")
+          domain=$(curl -sf \
+            -X POST \
+            -H "Authorization: Bearer ${RAILWAY_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"query\":\"{ project(id: \\\"${RAILWAY_PROJECT_ID}\\\") { services { edges { node { name domains { serviceDomains { domain } } } } } } }\"}" \
+            https://backboard.railway.app/graphql/v2 \
+          | jq -r --arg name "${{ env.WEB_SERVICE }}" \
+              '.data.project.services.edges[] | select(.node.name == $name) | .node.domains.serviceDomains[0].domain // empty')
           echo "url=https://${domain}" >> "$GITHUB_OUTPUT"
 
       # --- Health checks -----------------------------------------------------
