@@ -69,19 +69,6 @@ jobs:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
         run: |
-          curl -sf \
-            -X POST \
-            -H "Authorization: Bearer ${RAILWAY_TOKEN}" \
-            -H "Content-Type: application/json" \
-            -d "{\"query\":\"mutation { serviceCreate(input: { projectId: \\\"${RAILWAY_PROJECT_ID}\\\", name: \\\"${{ env.API_SERVICE }}\\\" }) { id } }\"}" \
-            https://backboard.railway.app/graphql/v2 || true
-          # || true — idempotent: no-ops if the service already exists
-
-      - name: Deploy API image
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-          RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
-        run: |
           railway up \
             --service "${{ env.API_SERVICE }}" \
             --image "${{ env.API_IMAGE }}" \

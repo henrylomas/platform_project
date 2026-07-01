@@ -2,114 +2,44 @@
 
 ## 1. Monorepo structure
 
-**Why Nx**
+I chose Nx because it manages the monorepo dependency graph automatically. It enforces boundaries in two directions: apps can import from libs, but libs can never import from apps, and apps cannot import from each other. That prevents circular dependencies. If the observability library could import from apps/api, you would create a cycle and the library would stop being independently buildable and testable.
 
-Nx provides explicit app/library boundaries enforced by the dependency graph. The `affected` commands mean CI only runs builds and tests for projects touched by a given commit — a team adding a feature to `apps/api` does not trigger the `apps/web` test suite. As the codebase grows, this keeps CI times bounded rather than linear in the number of projects.
+CI efficiency was another reason. Nx with GitHub Actions calculates which projects are actually impacted by a PR and only builds and tests those. With 10 or more teams this makes a significant difference. A change in apps/api does not trigger a rebuild of apps/web or libs/observability unless they are actually affected. That keeps CI times predictable as the codebase grows.
 
-**Why an integrated workspace (single `node_modules`)**
-
-A single `node_modules` at the root eliminates duplicate package versions and simplifies `tsconfig.base.json` path resolution. The alternative — npm workspaces with per-package installs — trades simplicity for package isolation that is rarely needed early on.
-
-**Library boundary**
-
-`libs/observability` declares no dependency on any app. It is a pure TypeScript library with zero imports from Express, React, or browser-specific APIs. Any app can consume it without circular dependency risk. The `tsconfig.base.json` path alias (`@platform/observability`) is the only coupling point.
-
-**Scaling to 10 teams**
-
-- Add Nx Cloud for distributed remote caching: every developer and CI run shares the same build/test cache, cutting cold-build times to near zero for unchanged projects.
-- Enforce module boundaries via `@nx/enforce-module-boundaries` lint rule: define tags (`scope:api`, `scope:web`, `type:lib`) and declare which tags may import which. This prevents a web component accidentally importing an API-only module.
-- Use Nx task pipelines (`dependsOn`) to sequence cross-project builds correctly without manual orchestration.
-
----
+I also included a minimal AI-driven development setup because I use Claude as a core part of my engineering workflow, not to generate code blindly, but to work from specifications and maintain consistency. The .ai/rules/ files define the coding standards any AI tool should follow in this repo: strict TypeScript, no console.log in application code, and file size limits. The .ai/specs/observability.md was the actual spec I wrote before implementing the library, defining its purpose, core types, and behavior before a single line of code was written. That is what spec-driven development looks like in practice.
 
 ## 2. Observability library design
 
-**Minimal provider interface**
+The library solves logging with a provider-agnostic design. If you call console.log directly in 50 places across your apps and tomorrow you decide to switch to Datadog, you have to find and replace every single call across every app. That is a recipe for disaster in a project with several teams depending on it, because each team implemented logging differently, with different formats and different levels.
 
-`ObservabilityProvider` exposes a single `log(entry: LogEntry): void` method. One method means one thing to implement: any provider written by any team member is complete in under ten lines. A richer interface (separate `debug()`, `info()` etc. on the provider) would duplicate the arity logic in every provider rather than once in the client.
+The solution is a single interface with one method: log(). Any provider must implement it. Think of it as a mask over the logging implementation. The app always calls the same face. Behind the mask can be Console, Datadog, or anything else. Swapping the mask is one line at the app entry point. Nothing behind it changes. This is the Strategy pattern: you define an interface, choose the implementation at runtime, and the rest of the code never knows which strategy is active.
 
-**Factory pattern**
+Each provider answers a different need. ConsoleProvider is for development and basic production, printing structured JSON to stdout which any log aggregator like CloudWatch or Railway can read. NoopProvider is for tests, discarding everything silently so your test suite produces no log output. DatadogProvider is a stub that demonstrates the interface supports cloud integrations without needing real credentials.
 
-`createObservability(provider, service)` decouples consumers from provider instantiation. Application code never calls `new ConsoleProvider()` in business logic — it receives an `ObservabilityClient` and calls `.info()`. Changing the provider from `ConsoleProvider` to `DatadogProvider` requires touching exactly one line: the call to `createObservability` in `main.ts`.
-
-**Deliberate omissions**
-
-Metrics, distributed tracing, and log sampling are out of scope for this challenge. Adding them later does not require changing the `ObservabilityProvider` interface — a future `MetricsProvider` or `TracingProvider` would be a separate interface alongside this one, not a modification to it.
-
-**Redaction at the library level**
-
-Sensitive field redaction (password, token, secret, authorization, key) is applied inside `ObservabilityClient.emit()` before any provider receives the entry. Application code passes raw context objects and never needs to remember to scrub them. This is a security invariant enforced at the library boundary rather than by convention.
-
-**Redaction lives in `client.ts`, not in providers**
-
-If redaction were in each provider, adding a fourth provider would require adding redaction there too — a rule enforced by convention rather than structure. Because redaction happens before `provider.log()` is called, providers are guaranteed never to see raw secrets regardless of how many are added.
-
----
+Metrics, distributed tracing, and log sampling were deliberately left out. Adding them would have been over-engineering for this challenge. The goal was to show how to keep a monorepo working with a shared library. I made sure it works as a solid MVP within the time constraints.
 
 ## 3. Observability provider switching mechanism
 
-**How it works at the call site**
+Swapping providers is a one line change at the app entry point. You pass a different provider to createObservability() and that is it. No feature code changes, no tests change, no other files change.
 
-```ts
-// Application code — unchanged when the provider changes
-client.info('order placed', { orderId: '123' });
-```
+The reason is that the app never talks to the provider directly. It only calls obs.info(), obs.error() on the client. The client internally delegates to whatever provider was passed at startup. You change the constructor argument and the entire app switches behavior.
 
-The application calls `client.info()`. The `ObservabilityClient` applies redaction, stamps `timestamp` and `service`, then delegates to `provider.log()`. The consumer never references the provider directly.
-
-**How to swap**
-
-Change the provider passed to `createObservability()` at the app entry point only:
-
-```ts
+```typescript
 // Before
 const obs = createObservability(new ConsoleProvider(), 'api');
 
-// After — zero other files change
+// After. Nothing else changes.
 const obs = createObservability(new DatadogProvider(), 'api');
 ```
 
-No feature code changes. No tests change. The test suite uses `NoopProvider` in every test so tests are equally unaffected by the swap.
-
-**Real Datadog integration**
-
-The `DatadogProvider` stub in this repo logs with a `[datadog]` prefix. A production integration would:
-
-1. `npm install dd-trace`
-2. Call `require('dd-trace').init({ service, env, version })` once at process startup, before any other imports.
-3. Replace the `console.log` stub with `tracer.logger.log()` or forward `LogEntry` fields to the Datadog Agent via its HTTP intake API.
-
-The `ObservabilityClient` interface and all call sites remain unchanged.
-
----
+For a real Datadog integration you would add the dd-trace SDK, initialize the tracer at app startup, and in DatadogProvider.log() forward the LogEntry fields to the Datadog agent. This was my first time working directly with Datadog, but the interface already supports it. Nothing in the application code would change.
 
 ## 4. Hosting provider choice and ephemeral lifecycle
 
-**Why Railway over AWS**
+Railway's deployment API maps directly to GitHub Actions lifecycle events. PR-isolated environments are a first-class concept in Railway, not something I would have to build myself. The free tier works for this challenge and setup requires a single token secret.
 
-Railway's deployment API maps directly to the GitHub Actions PR lifecycle: one CLI call creates a service, one call tears it down. PR-isolated environments are a first-class feature (no custom VPC, Route 53, or ECS task definition required). The free tier is sufficient for a technical challenge with low traffic. The only credential required is `RAILWAY_TOKEN`.
+With AWS I would have used ECS Fargate with CDK, which gives more control but significantly more complexity for a 3-day challenge. The trade-off was speed and simplicity over control. In a production platform for a team of 20 I would use AWS. Cost guardrails, VPC isolation, and infrastructure as code with CDK are non-negotiable at that scale.
 
-AWS would offer more control (fine-grained IAM, VPC isolation, ECS/EKS) but the operational overhead — ECR push, task definition registration, ALB target group management, Route 53 record creation — is disproportionate for ephemeral PR previews and would obscure the architectural intent of the challenge.
+Three failure modes are worth noting. First, Railway API timeout during deploy. If the process is slow I would add a retry mechanism with an exponential backoff strategy. Second, Docker build failure. I would update the PR comment to reflect that state clearly so the developer knows immediately what failed. Third, the health check polling timing out if the app takes longer than expected to start. I would increase the timeout threshold and surface the failure clearly in the PR comment.
 
-**Trade-offs**
-
-| | Railway | AWS |
-|---|---|---|
-| Setup time | Minutes | Hours |
-| Operational control | Low | High |
-| Cost visibility | Simple dashboard | Cost Explorer + budget alerts |
-| Vendor lock-in | High | Medium (open standards) |
-| Scaling ceiling | Medium | Effectively unlimited |
-
-**Failure modes**
-
-- *Railway API timeout*: the `railway up --detach` call succeeds but Railway never starts the container. The health-check polling loop exits non-zero after 5 minutes, failing the CI job explicitly rather than silently hanging.
-- *Docker build failure*: the `docker/build-push-action` step fails and exits before any Railway calls are made. The PR comment is never posted, making the failure visible.
-- *Health check never passes*: the polling loop logs each failed attempt with its attempt number, then exits non-zero. The Railway logs remain accessible in the Railway dashboard for post-mortem.
-
-**For a team of 20**
-
-- Add deployment status checks to the branch protection rules so a failing health check blocks the merge.
-- Post Slack notifications from the workflow on failure using `slackapi/slack-github-action`.
-- Add cost guardrails: a scheduled workflow that queries Railway's API and tears down any PR environment older than 24 hours with no associated open PR.
-- Move `RAILWAY_PROJECT_ID` into a separate Railway environment per team (e.g. `staging`, `preview`) to prevent preview deployments interfering with shared staging infrastructure.
+For a team of 20 I would add Slack notifications on failure, auto-teardown of environments after 24 hours idle to prevent forgotten PRs accumulating cost, and deployment status checks on branch protection rules so a failing health check blocks the merge.

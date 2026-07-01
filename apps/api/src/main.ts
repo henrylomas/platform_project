@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import { createObservability, ConsoleProvider } from '@platform/observability';
+// import { createObservability, DatadogProvider } from '@platform/observability';
 
 const port = process.env.PORT ? Number(process.env.PORT) : 3000;
 
